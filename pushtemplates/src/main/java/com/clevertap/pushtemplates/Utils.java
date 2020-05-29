@@ -10,6 +10,7 @@ import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.text.format.DateUtils;
+import android.util.Log;
 import android.widget.RemoteViews;
 
 
@@ -20,25 +21,33 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.lang.reflect.Array;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
+import java.nio.Buffer;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @SuppressWarnings("WeakerAccess")
 public class Utils {
 
-    public static boolean isPNFromCleverTap(Bundle extras){
-        if(extras == null) return false;
+    public static boolean isPNFromCleverTap(Bundle extras) {
+        if (extras == null) return false;
 
         boolean fromCleverTap = extras.containsKey(Constants.NOTIF_TAG);
         boolean shouldRender = fromCleverTap && extras.containsKey("nm");
         return fromCleverTap && shouldRender;
     }
-
 
 
     static Bitmap getNotificationBitmap(String icoPath, boolean fallbackToAppIcon, final Context context)
@@ -114,6 +123,132 @@ public class Utils {
         }
     }
 
+    static JSONObject getLinkedContent(String srcUrl, String method, Bundle headers) {
+        // Safe bet, won't have more than three /s
+        srcUrl = srcUrl.replace("///", "/");
+        srcUrl = srcUrl.replace("//", "/");
+        srcUrl = srcUrl.replace("http:/", "http://");
+        srcUrl = srcUrl.replace("https:/", "https://");
+        HttpURLConnection connection = null;
+        try {
+            /*// add parameters to the query
+            StringBuilder queries = new StringBuilder();
+            for(HashMap.Entry<String, String> query: urlParams.entrySet()) {
+                queries.append( "&" + query.getKey()+"="+query.getValue());
+            }
+            srcUrl += queries.toString();
+*/
+            URL url = new URL(srcUrl);
+
+            connection = (HttpURLConnection) url.openConnection();
+
+            //set request method POST, GET, etc.
+            connection.setRequestMethod(method);
+
+            // set headers
+            for (String key : headers.keySet()) {
+                connection.setRequestProperty(key, headers.getString(key));
+            }
+
+            connection.setDoInput(true);
+            connection.connect();
+            InputStream input = connection.getInputStream();
+            BufferedReader in = new BufferedReader(new InputStreamReader(input));
+            StringBuilder response = new StringBuilder();
+            String line;
+
+            while ((line = in.readLine()) != null) {
+                response.append(line);
+            }
+
+            return new JSONObject(response.toString());
+
+
+        } catch (IOException e) {
+
+            PTLog.verbose("Couldn't get dynamic data " + srcUrl);
+            return null;
+        } catch (JSONException e) {
+            e.printStackTrace();
+            return null;
+        } finally {
+            try {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            } catch (Throwable t) {
+                PTLog.verbose("Couldn't close connection!", t);
+            }
+        }
+    }
+
+    static String replaceLiquidTags(String pt_string, JSONObject liquidContent) {
+        try {
+            Pattern p = Pattern.compile("\\{(.*?)\\}");
+            Matcher m = p.matcher(pt_string);
+
+            while (m.find()) {
+                String match = m.group(1).trim();
+                String[] matchArr = match.split("\\|");
+                String liquidKey = matchArr[0].trim();
+                String defaultVal = "";
+                if (matchArr.length > 1) {
+                    defaultVal = matchArr[1].trim();
+                }
+                int sepPos = liquidKey.lastIndexOf(".");
+                if (sepPos > -1) {
+                    if (liquidKey.substring(sepPos + 1).equals("length")) {
+                        try {
+                            Integer size = ((JSONArray) liquidContent.get(liquidKey.substring(0, sepPos))).length();
+                            pt_string = pt_string.replace("{" + m.group(1) + "}", String.valueOf(size));
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                            pt_string = pt_string.replace("{" + m.group(1) + "}", defaultVal);
+                        }
+                    } else {
+                        try {
+                            if (liquidKey.contains(".")) {
+                                String[] liquidKeyArr = liquidKey.split("\\.");
+                                if (liquidKeyArr[0].contains("[")) {
+                                    Pattern pattern = Pattern.compile("\\[(.*?)\\]");
+                                    Matcher matcher = pattern.matcher(liquidKeyArr[0]);
+                                    Integer index = 0;
+                                    while (matcher.find()) {
+                                        index = Integer.valueOf(matcher.group(1));
+                                    }
+
+                                    JSONObject item = (JSONObject) ((JSONArray) liquidContent.get(liquidKeyArr[0].substring(0,liquidKeyArr[0].indexOf("[")))).get(index);
+                                    String result = item.getString(liquidKeyArr[1]).trim();
+                                    pt_string = pt_string.replace("{" + m.group(1) + "}", result);
+                                } else {
+                                    JSONObject item = (JSONObject) liquidContent.get(liquidKeyArr[0]);
+                                    String result = item.getString(liquidKeyArr[1]).trim();
+                                    pt_string = pt_string.replace("{" + m.group(1) + "}", result);
+                                }
+                            } else {
+                                pt_string = pt_string.replace("{" + m.group(1) + "}", String.valueOf(liquidContent.get(liquidKey)));
+                            }
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                            pt_string = pt_string.replace("{" + m.group(1) + "}", defaultVal);
+                        }
+                    }
+                } else {
+                    try {
+                        pt_string = pt_string.replace("{" + m.group(1) + "}", String.valueOf(liquidContent.get(liquidKey)));
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        pt_string = pt_string.replace("{" + m.group(1) + "}", defaultVal);
+                    }
+                }
+            }
+            return pt_string;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
     static String _getManifestStringValueForKey(Bundle manifest, String name) {
         try {
             Object o = manifest.get(name);
@@ -128,59 +263,60 @@ public class Utils {
         return ai.icon;
     }
 
-    static ArrayList<String> getImageListFromExtras(Bundle extras){
+    static ArrayList<String> getImageListFromExtras(Bundle extras) {
         ArrayList<String> imageList = new ArrayList<>();
-        for(String key : extras.keySet()){
-            if(key.contains("pt_img")){
+        for (String key : extras.keySet()) {
+            if (key.contains("pt_img")) {
                 imageList.add(extras.getString(key));
             }
         }
         return imageList;
     }
 
-    static ArrayList<String> getCTAListFromExtras(Bundle extras){
+    static ArrayList<String> getCTAListFromExtras(Bundle extras) {
         ArrayList<String> ctaList = new ArrayList<>();
-        for(String key : extras.keySet()){
-            if(key.contains("pt_cta")){
+        for (String key : extras.keySet()) {
+            if (key.contains("pt_cta")) {
                 ctaList.add(extras.getString(key));
             }
         }
         return ctaList;
     }
 
-    static ArrayList<String> getDeepLinkListFromExtras(Bundle extras){
+    static ArrayList<String> getDeepLinkListFromExtras(Bundle extras) {
         ArrayList<String> dlList = new ArrayList<>();
-        for(String key : extras.keySet()){
-            if(key.contains("pt_dl")){
+        for (String key : extras.keySet()) {
+            if (key.contains("pt_dl")) {
                 dlList.add(extras.getString(key));
             }
         }
         return dlList;
     }
 
-    static ArrayList<String> getBigTextFromExtras(Bundle extras){
+    static ArrayList<String> getBigTextFromExtras(Bundle extras) {
         ArrayList<String> btList = new ArrayList<>();
-        for(String key : extras.keySet()){
-            if(key.contains("pt_bt")){
+        for (String key : extras.keySet()) {
+            if (key.contains("pt_bt")) {
                 btList.add(extras.getString(key));
             }
         }
         return btList;
     }
-    static ArrayList<String> getSmallTextFromExtras(Bundle extras){
+
+    static ArrayList<String> getSmallTextFromExtras(Bundle extras) {
         ArrayList<String> stList = new ArrayList<>();
-        for(String key : extras.keySet()){
-            if(key.contains("pt_st")){
+        for (String key : extras.keySet()) {
+            if (key.contains("pt_st")) {
                 stList.add(extras.getString(key));
             }
         }
         return stList;
     }
 
-    static ArrayList<String> getPriceFromExtras(Bundle extras){
+    static ArrayList<String> getPriceFromExtras(Bundle extras) {
         ArrayList<String> stList = new ArrayList<>();
-        for(String key : extras.keySet()){
-            if(key.contains("pt_price")){
+        for (String key : extras.keySet()) {
+            if (key.contains("pt_price")) {
                 stList.add(extras.getString(key));
             }
         }
@@ -259,7 +395,7 @@ public class Utils {
         for (String key : keys) {
             try {
                 json.put(key, extras.get(key));
-            } catch(JSONException e) {
+            } catch (JSONException e) {
                 //Handle exception here
             }
         }

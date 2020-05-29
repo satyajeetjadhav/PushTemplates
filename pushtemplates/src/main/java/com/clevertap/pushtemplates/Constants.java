@@ -26,5 +26,8 @@ public class Constants {
     public static final String PT_JSON = "pt_json";
     public static final String PT_BUY_NOW_DL = "pt_buy_now_dl";
     public static final String PT_DEFAULT_DL = "pt_default_dl";
+    public static final String PT_API_ENDPOINT = "pt_api_endpoint";
+    public static final String PT_API_METHOD = "pt_api_method";
+    public static final String PT_API_HEADERS = "pt_api_headers";
 
 }
